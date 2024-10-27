@@ -299,11 +299,22 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     
     response = requests.get(full_url, headers=headers)
     if response.status_code != 200:
-        print(f"Ошибка пр получении данных о продажах: {response.status_code}. Ответ сервера: {response.text}")
-        return 0, 0, 0
+        print(f"Ошибка при получении данных о продажах: {response.status_code}. Ответ сервера: {response.text}")
+        return 0, '', ''  # Возвращаем 0 для скорости и пустую строку для UUID
 
     data = response.json()
     rows = data.get('rows', [])
+
+    # Получаем UUID группы и название группы из первой строки данных
+    group_uuid = ''
+    group_name = ''
+    if rows:
+        assortment = rows[0].get('assortment', {})
+        product_folder = assortment.get('productFolder', {})
+        group_href = product_folder.get('meta', {}).get('href', '')
+        group_uuid = group_href.split('/')[-1] if group_href else ''
+        group_name = product_folder.get('name', '')  # Получаем название группы
+        print(f"Found group UUID: {group_uuid}, name: {group_name}")
 
     # Фильтрация по UUID модификации
     filtered_rows = [
@@ -350,9 +361,23 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     else:
         sales_speed = 0
 
-    print(f"sales_speed: {sales_speed}")
+    print(f"sales_speed: {sales_speed}, group_uuid: {group_uuid}, group_name: {group_name}")
 
-    return sales_speed
+    return sales_speed, group_uuid, group_name  # Возвращаем также название группы
+
+def get_group_path(group_uuid, product_groups):
+    def find_group_path(groups, target_uuid, current_path=[]):
+        for group in groups:
+            if group['id'] == target_uuid:
+                return current_path + [group['name']]
+            if group.get('children'):
+                path = find_group_path(group['children'], target_uuid, current_path + [group['name']])
+                if path:
+                    return path
+        return None
+
+    path = find_group_path(product_groups, group_uuid)
+    return '/'.join(path) if path else ''
 
 def create_excel_report(data, store_id, end_date, planning_days):
     try:
@@ -360,9 +385,13 @@ def create_excel_report(data, store_id, end_date, planning_days):
         wb = Workbook()
         ws = wb.active
         ws.title = "Отчет прибыльности"
+        
+        # Получаем структуру групп один раз
+        product_groups = get_product_groups()
 
-        # Обновляем заголовки
-        headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж', f'Прогноз на {planning_days} дней']
+        # Добавляем заголовок для пути группы
+        headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж', 
+                  f'Прогноз на {planning_days} дней', 'UUID группы', 'Наименование группы', 'Путь группы']
         for col, header in enumerate(headers, start=1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = Font(bold=True, color="FFFFFF")
@@ -383,20 +412,30 @@ def create_excel_report(data, store_id, end_date, planning_days):
             ws.cell(row=row, column=3, value=round(item.get('profit', 0) / 100, 2))
             
             if variant_id:
-                sales_speed = get_sales_speed(variant_id, store_id, end_date, is_variant)
+                sales_speed, group_uuid, group_name = get_sales_speed(variant_id, store_id, end_date, is_variant)
                 if sales_speed != 0:
                     ws.cell(row=row, column=4, value=sales_speed)
-                    # Используем переданное количество дней вместо фиксированного значения 30
                     ws.cell(row=row, column=5).value = sales_speed * planning_days
                 else:
                     ws.cell(row=row, column=4, value="Нет данных")
                     ws.cell(row=row, column=5, value="")
+                    
+                # Записываем UUID группы и название группы
+                ws.cell(row=row, column=6, value=group_uuid)
+                ws.cell(row=row, column=7, value=group_name)
+                
+                # Получаем и записываем путь группы из существующей структуры
+                group_path = get_group_path(group_uuid, product_groups)
+                ws.cell(row=row, column=8, value=group_path)
             else:
                 ws.cell(row=row, column=4, value="Ошибка")
                 ws.cell(row=row, column=5, value="")
+                ws.cell(row=row, column=6, value="")
+                ws.cell(row=row, column=7, value="")
+                ws.cell(row=row, column=8, value="")
 
-        # Создаем таблицу после заполнения данных
-        table_ref = f"A1:E{len(data['rows']) + 1}"
+        # Обновляем диапазон таблицы, включая новый столбец
+        table_ref = f"A1:H{len(data['rows']) + 1}"
         tab = Table(displayName="Table1", ref=table_ref)
         style = TableStyleInfo(
             name="TableStyleMedium9",
