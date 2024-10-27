@@ -299,7 +299,7 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     
     response = requests.get(full_url, headers=headers)
     if response.status_code != 200:
-        print(f"Ошибка при получении данных о продажах: {response.status_code}. Ответ сервера: {response.text}")
+        print(f"Ошибка при получении данных о проажах: {response.status_code}. Ответ сервера: {response.text}")
         return 0, '', ''  # Возвращаем 0 для скорости и пустую строку для UUID
 
     data = response.json()
@@ -365,19 +365,25 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
 
     return sales_speed, group_uuid, group_name  # Возвращаем также название группы
 
-def get_group_path(group_uuid, product_groups):
-    def find_group_path(groups, target_uuid, current_path=[]):
+def get_group_path(group_uuid, product_groups, get_uuid=False):
+    def find_group_path(groups, target_uuid, current_path=[], current_uuid_path=[]):
         for group in groups:
             if group['id'] == target_uuid:
-                return current_path + [group['name']]
+                return (current_path + [group['name']], current_uuid_path + [group['id']])
             if group.get('children'):
-                path = find_group_path(group['children'], target_uuid, current_path + [group['name']])
+                path = find_group_path(group['children'], target_uuid, 
+                                     current_path + [group['name']], 
+                                     current_uuid_path + [group['id']])
                 if path:
                     return path
         return None
 
     path = find_group_path(product_groups, group_uuid)
-    return '/'.join(path) if path else ''
+    if not path:
+        return ''
+    
+    names_path, uuid_path = path
+    return '/'.join(uuid_path) if get_uuid else '/'.join(names_path)
 
 def create_excel_report(data, store_id, end_date, planning_days):
     try:
@@ -389,18 +395,8 @@ def create_excel_report(data, store_id, end_date, planning_days):
         # Получаем структуру групп один раз
         product_groups = get_product_groups()
 
-        # Добавляем заголовок для пути группы
-        headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж', 
-                  f'Прогноз на {planning_days} дней', 'UUID группы', 'Наименование группы', 'Путь группы']
-        for col, header in enumerate(headers, start=1):
-            cell = ws.cell(row=1, column=col, value=header)
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
-        
-        # Создаем список для хранения всех данных
+        # Собираем все данные сначала
         rows_data = []
-        
-        # Собираем все данные
         for item in data['rows']:
             check_if_cancelled()
             assortment = item.get('assortment', {})
@@ -432,7 +428,7 @@ def create_excel_report(data, store_id, end_date, planning_days):
                 
                 row_data['group_uuid'] = group_uuid
                 row_data['group_name'] = group_name
-                row_data['group_path'] = get_group_path(group_uuid, product_groups)
+                row_data['group_path'] = get_group_path(group_uuid, product_groups, get_uuid=False)
             else:
                 row_data['sales_speed'] = "Ошибка"
             
@@ -441,19 +437,49 @@ def create_excel_report(data, store_id, end_date, planning_days):
         # Сортируем данные по UUID группы по убыванию
         rows_data.sort(key=lambda x: x['group_uuid'] if x['group_uuid'] else '', reverse=True)
         
-        # Записываем отсортированные данные в Excel
-        for row, row_data in enumerate(rows_data, start=2):
-            ws.cell(row=row, column=1, value=row_data['name'])
-            ws.cell(row=row, column=2, value=row_data['quantity'])
-            ws.cell(row=row, column=3, value=row_data['profit'])
-            ws.cell(row=row, column=4, value=row_data['sales_speed'])
-            ws.cell(row=row, column=5, value=row_data['forecast'])
-            ws.cell(row=row, column=6, value=row_data['group_uuid'])
-            ws.cell(row=row, column=7, value=row_data['group_name'])
-            ws.cell(row=row, column=8, value=row_data['group_path'])
+        # Находим максимальную глубину пути в группах
+        max_depth = 0
+        for row_data in rows_data:
+            path = row_data['group_path']
+            if path:
+                depth = len(path.split('/'))
+                max_depth = max(max_depth, depth)
+        
+        print(f"Максимальная глубина пути: {max_depth}")
+        
+        # Формируем заголовки с учетом глубины
+        group_level_headers = [f'Уровень {i+1}' for i in range(max_depth)]
+        headers = group_level_headers + [
+            'Наименование', 'Количество', 'Прибыльность', 'Скорость продаж', 
+            f'Прогноз на {planning_days} дней', 'UUID группы'
+        ]
+        
+        # Записываем заголовки
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+        
+        # Записываем данные
+        for row_idx, row_data in enumerate(rows_data, start=2):
+            # Заполняем уровни групп
+            if row_data['group_path']:
+                groups = row_data['group_path'].split('/')
+                for level, group in enumerate(groups):
+                    ws.cell(row=row_idx, column=level+1, value=group)
+            
+            # Смещаем все остальные столбцы вправо на max_depth
+            base_col = max_depth + 1
+            ws.cell(row=row_idx, column=base_col, value=row_data['name'])
+            ws.cell(row=row_idx, column=base_col + 1, value=row_data['quantity'])
+            ws.cell(row=row_idx, column=base_col + 2, value=row_data['profit'])
+            ws.cell(row=row_idx, column=base_col + 3, value=row_data['sales_speed'])
+            ws.cell(row=row_idx, column=base_col + 4, value=row_data['forecast'])
+            ws.cell(row=row_idx, column=base_col + 5, value=row_data['group_uuid'])
 
-        # Обновляем диапазон таблицы
-        table_ref = f"A1:H{len(rows_data) + 1}"
+        # Обновляем диапазон таблицы с учетом новых столбцов
+        last_col = max_depth + 6  # 6 - количество оставшихся столбцов
+        table_ref = f"A1:{chr(64 + last_col)}{len(rows_data) + 1}"
         tab = Table(displayName="Table1", ref=table_ref)
         style = TableStyleInfo(
             name="TableStyleMedium9",
