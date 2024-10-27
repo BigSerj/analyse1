@@ -9,12 +9,71 @@
         form { max-width: 400px; margin: 0 auto; }
         label, input, select { display: block; margin-bottom: 10px; width: 100%; }
         input[type="submit"] { background-color: #4CAF50; color: white; padding: 10px; border: none; cursor: pointer; }
-        #group-selects { margin-bottom: 20px; }
+        .group-container { 
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            /* Убрали border-bottom */
+        }
+        .add-group-btn { 
+            width: 100%;
+            padding: 5px;
+            margin: 15px 0 10px 0;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .group-selects { 
+            margin-bottom: 10px;
+        }
+        .group-header {
+            border-top: 2px solid #ccc;
+            margin-top: 15px;
+            padding-top: 15px;
+            margin-bottom: 10px;
+        }
+        .add-group-section {
+            border-bottom: 2px solid #ccc;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+        }
+        select {
+            margin-bottom: 5px;
+        }
+        
+        .buttons-container {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .submit-btn {
+            flex: 2;
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .stop-btn {
+            flex: 1;
+            background-color: #ff4444;
+            color: white;
+            padding: 10px;
+            border: none;
+            cursor: pointer;
+        }
+        
+        .processing-indicator {
+            display: none;
+            text-align: center;
+            margin-top: 10px;
+            color: #666;
+        }
     </style>
 </head>
 <body>
     <h1>Отчет прибыльности по товарам</h1>
-    <form method="POST" action="{{ url_for('index') }}">
+    <form method="POST" action="{{ url_for('index') }}" onsubmit="return startProcessing(this)">
         <label for="start_date">Дата начала:</label>
         <input type="date" id="start_date" name="start_date" required>
         
@@ -28,63 +87,268 @@
             {% endfor %}
         </select>
         
-        <label>Группа товаров:</label>
-        <div id="group-selects">
-            <select id="group-select-0" onchange="loadSubgroups(this, 0)">
-                <option value="">Выберите группу</option>
-                {% for group in product_groups %}
-                    <option value="{{ group.id }}" data-children='{{ group.children | tojson | forceescape }}'>{{ group.name }}</option>
-                {% endfor %}
-            </select>
+        <div class="group-header">
+            <label>Группа товаров:</label>
         </div>
-        <input type="hidden" id="selected-group" name="product_group" value="">
         
-        <button type="submit">Сформировать отчет</button>
+        <div id="groups-wrapper">
+            <div class="group-container" id="group-container-0">
+                <div class="group-selects">
+                    <select id="group-select-0-0" name="temp_product_group" onchange="loadSubgroups(this, 0, 0)">
+                        <option value="">Выберите группу</option>
+                        {% for group in product_groups %}
+                            <option value="{{ group.id }}" data-children='{{ group.children | tojson | forceescape }}'>{{ group.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Добавляем скрытое поле для хранения итоговых значений -->
+        <input type="hidden" id="final_product_groups" name="product_group" value="">
+        
+        <div class="add-group-section">
+            <button type="button" class="add-group-btn" onclick="addNewGroupContainer()">+ Добавить группу товаров</button>
+        </div>
+        
+        <div class="buttons-container">
+            <button type="submit" id="submit-btn" class="submit-btn">Сформировать отчет</button>
+            <button type="button" id="stop-btn" class="stop-btn" onclick="stopProcessing()">СТОП</button>
+        </div>
+        
+        <div id="processing-indicator" class="processing-indicator">
+            Формирование отчета...
+        </div>
     </form>
 
     <script>
-        function loadSubgroups(select, level) {
-            const groupId = select.value;
-            document.getElementById('selected-group').value = groupId;
+        let groupContainerCounter = 1;
+        let processingCancelled = false;
+        
+        function prepareFormData(form) {
+            const groupContainers = document.querySelectorAll('.group-container');
+            const finalGroups = [];
+
+            groupContainers.forEach(container => {
+                const selects = container.querySelectorAll('select');
+                let lastSelectedValue = '';
+
+                // Проходим по всем селектам в контейнере
+                selects.forEach(select => {
+                    if (select.value !== '') {
+                        lastSelectedValue = select.value;
+                    }
+                });
+
+                // Добавляем значение только если оно не пустое
+                if (lastSelectedValue !== '') {
+                    finalGroups.push(lastSelectedValue);
+                }
+            });
+
+            // Записываем собранные значения в скрытое поле
+            document.getElementById('final_product_groups').value = finalGroups.join(',');
+            return true;
+        }
+
+        function addNewGroupContainer() {
+            const wrapper = document.getElementById('groups-wrapper');
             
-            // Удаляем все следующие селекты
-            const groupSelects = document.getElementById('group-selects');
-            while (groupSelects.children.length > level + 1) {
-                groupSelects.removeChild(groupSelects.lastChild);
+            // Создаем новый контейнер
+            const newContainer = document.createElement('div');
+            newContainer.className = 'group-container';
+            newContainer.id = `group-container-${groupContainerCounter}`;
+            
+            const selectsDiv = document.createElement('div');
+            selectsDiv.className = 'group-selects';
+            
+            // Создаем новый select
+            const select = document.createElement('select');
+            select.id = `group-select-${groupContainerCounter}-0`;
+            select.name = 'temp_product_group'; // Изменено с product_group на temp_product_group
+            
+            // Копируем все опции из оригинального селекта
+            const originalSelect = document.getElementById('group-select-0-0');
+            
+            // Клонируем все опции вместе с их атрибутами
+            originalSelect.querySelectorAll('option').forEach(origOption => {
+                const option = origOption.cloneNode(true);
+                select.appendChild(option);
+            });
+            
+            // Привязываем обработчик события
+            select.addEventListener('change', function(event) {
+                const currentContainer = parseInt(this.closest('.group-container').id.split('-').pop());
+                loadSubgroups(this, 0, currentContainer);
+            });
+            
+            selectsDiv.appendChild(select);
+            newContainer.appendChild(selectsDiv);
+            wrapper.appendChild(newContainer);
+            
+            groupContainerCounter++;
+        }
+
+        function loadSubgroups(select, level, containerIndex) {
+            // Находим контейнер через closest
+            const groupContainer = select.closest('.group-container');
+            if (!groupContainer) {
+                console.error('Container not found');
+                return;
+            }
+
+            const selectsDiv = groupContainer.querySelector('.group-selects');
+            if (!selectsDiv) {
+                console.error('Selects div not found');
+                return;
+            }
+
+            // Удаляем все следующие селекты после текущего
+            const selects = Array.from(selectsDiv.getElementsByTagName('select'));
+            const currentSelectIndex = selects.indexOf(select);
+            for (let i = selects.length - 1; i > currentSelectIndex; i--) {
+                selectsDiv.removeChild(selects[i]);
+            }
+
+            // Если выбрано пустое значение, завершаем функцию после удаления селектов
+            const groupId = select.value;
+            if (!groupId) return;
+            
+            const selectedOption = select.options[select.selectedIndex];
+            if (!selectedOption) {
+                console.error('Selected option not found');
+                return;
+            }
+
+            const childrenData = selectedOption.getAttribute('data-children');
+            if (!childrenData) {
+                console.log('No children data found');
+                return;
+            }
+
+            let children;
+            try {
+                children = JSON.parse(childrenData);
+            } catch (e) {
+                console.error('Error parsing children:', e);
+                return;
             }
             
-            if (groupId) {
-                const selectedOption = select.options[select.selectedIndex];
-                const children = JSON.parse(selectedOption.dataset.children);
+            if (children && children.length > 0) {
+                const newSelect = document.createElement('select');
+                newSelect.id = `group-select-${containerIndex}-${level + 1}`;
+                newSelect.name = 'temp_product_group'; // Изменено с product_group на temp_product_group
                 
-                if (children.length > 0) {
-                    const newSelect = document.createElement('select');
-                    newSelect.id = `group-select-${level + 1}`;
-                    newSelect.onchange = function() { loadSubgroups(this, level + 1); };
-                    
-                    const defaultOption = document.createElement('option');
-                    defaultOption.value = "";
-                    defaultOption.textContent = "Выберите подгруппу";
-                    newSelect.appendChild(defaultOption);
-                    
-                    children.forEach(subgroup => {
-                        const option = document.createElement('option');
-                        option.value = subgroup.id;
-                        option.textContent = subgroup.name;
-                        option.dataset.children = JSON.stringify(subgroup.children);
-                        newSelect.appendChild(option);
-                    });
-                    
-                    groupSelects.appendChild(newSelect);
-                }
+                const defaultOption = document.createElement('option');
+                defaultOption.value = "";
+                defaultOption.textContent = "Выберите подгруппу";
+                newSelect.appendChild(defaultOption);
+                
+                children.forEach(subgroup => {
+                    const option = document.createElement('option');
+                    option.value = subgroup.id;
+                    option.textContent = subgroup.name;
+                    if (subgroup.children) {
+                        option.setAttribute('data-children', JSON.stringify(subgroup.children));
+                    }
+                    newSelect.appendChild(option);
+                });
+                
+                newSelect.addEventListener('change', function(event) {
+                    const currentContainer = parseInt(this.closest('.group-container').id.split('-').pop());
+                    const currentLevel = selects.length;
+                    loadSubgroups(this, currentLevel, currentContainer);
+                });
+                
+                selectsDiv.appendChild(newSelect);
             }
         }
 
         // Инициализация первого выпадающего списка
         document.addEventListener('DOMContentLoaded', function() {
-            const firstSelect = document.getElementById('group-select-0');
-            firstSelect.onchange = function() { loadSubgroups(this, 0); };
+            const firstSelect = document.getElementById('group-select-0-0');
+            if (firstSelect) {
+                firstSelect.addEventListener('change', function(event) {
+                    loadSubgroups(this, 0, 0);
+                });
+            }
         });
+        
+        function startProcessing(form) {
+            if (!prepareFormData(form)) return false;
+            
+            document.getElementById('submit-btn').style.display = 'block';
+            document.getElementById('stop-btn').style.display = 'block';
+            document.getElementById('processing-indicator').style.display = 'block';
+            processingCancelled = false;
+            
+            // Отправляем запрос асинхронно
+            fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form)
+            })
+            .then(response => {
+                if (processingCancelled) {
+                    throw new Error('Processing cancelled');
+                }
+                if (!response.ok) {
+                    throw new Error('Server error');
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                if (!processingCancelled) {  // Проверяем флаг отмены перед скачиванием
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'profitability_report.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                }
+            })
+            .catch(error => {
+                if (error.message === 'Processing cancelled') {
+                    console.log('Processing was cancelled by user');
+                } else {
+                    alert('Произошла ошибка: ' + error);
+                }
+            })
+            .finally(() => {
+                document.getElementById('submit-btn').style.display = 'block';
+                document.getElementById('stop-btn').style.display = 'block';
+                document.getElementById('processing-indicator').style.display = 'none';
+            });
+            
+            return false; // Предотвращаем стандартную отправку формы
+        }
+        
+        function stopProcessing() {
+            processingCancelled = true;
+            // Отправляем запрос на сервер для остановки обработки
+            fetch("{{ url_for('stop_processing') }}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log('Processing stopped successfully');
+                    // Сбрасываем UI в исходное состояние
+                    document.getElementById('submit-btn').style.display = 'block';
+                    document.getElementById('stop-btn').style.display = 'block';
+                    document.getElementById('processing-indicator').style.display = 'none';
+                    // Показываем сообщение пользователю
+                    alert('Обработка остановлена');
+                } else {
+                    console.error('Failed to stop processing');
+                }
+            })
+            .catch(error => {
+                console.error('Error stopping processing:', error);
+            });
+        }
     </script>
 </body>
 </html>

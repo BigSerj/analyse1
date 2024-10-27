@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, abort
 from markupsafe import Markup
 import requests
 from openpyxl import Workbook
@@ -7,6 +7,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.styles import Font, PatternFill
 from datetime import datetime, timedelta
 import json
+import threading
 
 app = Flask(__name__)
 
@@ -17,6 +18,10 @@ with open('config.py', 'r') as config_file:
     exec(config_file.read())
 
 BASE_URL = 'https://api.moysklad.ru/api/remap/1.2'
+
+# Добавим глобальную переменную для отслеживания состояния
+processing_cancelled = False
+processing_lock = threading.Lock()
 
 def render_group_options(groups, level=0):
     result = []
@@ -33,12 +38,13 @@ def index():
         start_date = request.form['start_date']
         end_date = request.form['end_date']
         store_id = request.form['store_id']
-        product_group = request.form.get('product_group', '')
+        # Получаем список ID групп из строки, разделенной запятыми
+        product_groups = request.form['product_group'].split(',') if request.form['product_group'] else []
         
-        print(f"Received form data: start_date={start_date}, end_date={end_date}, store_id={store_id}, product_group={product_group}")
+        print(f"Received form data: start_date={start_date}, end_date={end_date}, store_id={store_id}, product_groups={product_groups}")
         
         try:
-            report_data = get_report_data(start_date, end_date, store_id, product_group)
+            report_data = get_report_data(start_date, end_date, store_id, product_groups)
             
             # print(f"Полученные данные: {json.dumps(report_data, indent=2, ensure_ascii=False)}")
             
@@ -61,7 +67,24 @@ def get_subgroups(group_id):
     subgroups = get_subgroups_for_group(group_id)
     return jsonify(subgroups)
 
-def get_report_data(start_date, end_date, store_id, product_group):
+@app.route('/stop_processing', methods=['POST'])
+def stop_processing():
+    global processing_cancelled
+    with processing_lock:
+        processing_cancelled = True
+    return '', 204
+
+def check_if_cancelled():
+    global processing_cancelled
+    with processing_lock:
+        if processing_cancelled:
+            raise Exception("Processing cancelled by user")
+
+def get_report_data(start_date, end_date, store_id, product_groups):
+    global processing_cancelled
+    with processing_lock:
+        processing_cancelled = False
+    
     try:
         url = f"{BASE_URL}/report/profit/byvariant"
         headers = {
@@ -89,17 +112,23 @@ def get_report_data(start_date, end_date, store_id, product_group):
             store_url = f"{BASE_URL}/entity/store/{store_id}"
             filter_parts.append(f'store={store_url}')
         
-        if product_group:
-            product_folder_url = f"{BASE_URL}/entity/productfolder/{product_group}"
-            filter_parts.append(f'productFolder={product_folder_url}')
+        # Modified to handle multiple product groups
+        if product_groups:
+            for group_id in product_groups:
+                if group_id:  # Check if group_id is not empty
+                    product_folder_url = f"{BASE_URL}/entity/productfolder/{group_id}"
+                    filter_parts.append(f'productFolder={product_folder_url}')
         
         if filter_parts:
+            # Join all filter parts with semicolon
             params['filter'] = ';'.join(filter_parts)
         
         all_rows = []
         total_count = None
         
         while True:
+            check_if_cancelled()  # Проверяем отмену
+            
             # Формируем строку запроса
             query_params = [f"{k}={v}" for k, v in params.items() if k != 'filter']
             if 'filter' in params:
@@ -129,25 +158,12 @@ def get_report_data(start_date, end_date, store_id, product_group):
             
             params['offset'] += params['limit']
         
-        result = {
-            'meta': data.get('meta', {}),
-            'rows': all_rows
-        }
+        return {'meta': data.get('meta', {}), 'rows': all_rows}
         
-        print(f"Полчено записей: {len(all_rows)}")
-        return result
-    except requests.exceptions.RequestException as e:
-        error_message = f"Ошибка при отправке запроса: {str(e)}"
-        print(error_message)
-        raise Exception(error_message)
-    except json.JSONDecodeError as e:
-        error_message = f"Ошибка при разборе JSON ответа: {str(e)}"
-        print(error_message)
-        raise Exception(error_message)
     except Exception as e:
-        error_message = f"Неожиданная ошибка: {str(e)}"
-        print(error_message)
-        raise Exception(error_message)
+        if str(e) == "Processing cancelled by user":
+            abort(499, description="Processing cancelled by user")
+        raise e
 
 def get_stores():
     url = f"{BASE_URL}/entity/store"
@@ -341,80 +357,89 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     return sales_speed
 
 def create_excel_report(data, store_id, end_date):
-    print("Начало создания Excel отчета")
+    try:
+        print("Начало создания Excel отчета")
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Отчет прибыльности"
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Отчет прибыльности"
-
-    if not data or 'rows' not in data or not data['rows']:
-        print("Ошибка: Нет данных для создания отчета")
-        ws.cell(row=1, column=1, value="Нет данных для отчета")
-        filename = f"empty_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        wb.save(filename)
-        return filename
-
-    headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж']
-    for col, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True, color="FFFFFF")  # Белый цвет текста
-        cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")  # Черный фон
-
-    for row, item in enumerate(data['rows'], start=2):
-        assortment = item.get('assortment', {})
-        assortment_meta = assortment.get('meta', {})
-        assortment_href = assortment_meta.get('href', '')
+        headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж']
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
         
-        is_variant = '/variant/' in assortment_href
+        for row, item in enumerate(data['rows'], start=2):
+            check_if_cancelled()  # Проверяем отмену
+            assortment = item.get('assortment', {})
+            assortment_meta = assortment.get('meta', {})
+            assortment_href = assortment_meta.get('href', '')
+            
+            is_variant = '/variant/' in assortment_href
+            
+            if is_variant:
+                variant_id = assortment_href.split('/variant/')[-1]
+            else:
+                variant_id = assortment_href.split('/product/')[-1]
+            
+            print(f"\nОбработка товара: {assortment.get('name', '')}")
+            print(f"ID товара/модификации: {variant_id}")
+            print(f"Тип: {'Модификация' if is_variant else 'Товар'}")
+            print(f"Количество продаж: {item.get('sellQuantity', 0)}")
+            print(f"Прибыль: {round(item.get('profit', 0) / 100, 2)}")
+            
+            ws.cell(row=row, column=1, value=assortment.get('name', ''))
+            ws.cell(row=row, column=2, value=item.get('sellQuantity', 0))
+            ws.cell(row=row, column=3, value=round(item.get('profit', 0) / 100, 2))
+            
+            if variant_id:
+                print(f"Получение данных о продажах для товара: {assortment.get('name', '')}, ID: {variant_id}")
+                sales_speed = get_sales_speed(variant_id, store_id, end_date, is_variant)
+                ws.cell(row=row, column=4, value=sales_speed if sales_speed != 0 else "Нет данных")
+            else:
+                print(f"Не удалось получить ID для товара: {assortment.get('name', '')}")
+                ws.cell(row=row, column=4, value="Ошибка")
+
+        tab = Table(displayName="Table1", ref=f"A1:D{len(data['rows']) + 1}")
+        style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
+                               showLastColumn=False, showRowStripes=True, showColumnStripes=False)
+        tab.tableStyleInfo = style
+        ws.add_table(tab)
+
+        ws.freeze_panes = 'A2'
+
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
-        if is_variant:
-            variant_id = assortment_href.split('/variant/')[-1]
-        else:
-            variant_id = assortment_href.split('/product/')[-1]
+        try:
+            wb.save(filename)
+            wb.close()  # Явно закрываем workbook
+            print(f"Excel отчет создан: {filename}")
+            return filename
+        except Exception as e:
+            print(f"Ошибка при сохранении файла: {str(e)}")
+            raise e
         
-        print(f"\nОбработка товара: {assortment.get('name', '')}")
-        print(f"ID товара/модификации: {variant_id}")
-        print(f"Тип: {'Модификация' if is_variant else 'Товар'}")
-        print(f"Количество продаж: {item.get('sellQuantity', 0)}")
-        print(f"Прибыль: {round(item.get('profit', 0) / 100, 2)}")
-        
-        ws.cell(row=row, column=1, value=assortment.get('name', ''))
-        ws.cell(row=row, column=2, value=item.get('sellQuantity', 0))
-        ws.cell(row=row, column=3, value=round(item.get('profit', 0) / 100, 2))
-        
-        if variant_id:
-            print(f"Получение данных о продажах для товара: {assortment.get('name', '')}, ID: {variant_id}")
-            sales_speed = get_sales_speed(variant_id, store_id, end_date, is_variant)
-            ws.cell(row=row, column=4, value=sales_speed if sales_speed != 0 else "Нет данных")
-        else:
-            print(f"Не удалось получить ID для товара: {assortment.get('name', '')}")
-            ws.cell(row=row, column=4, value="Ошибка")
-
-    tab = Table(displayName="Table1", ref=f"A1:D{len(data['rows']) + 1}")
-    style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
-                           showLastColumn=False, showRowStripes=True, showColumnStripes=False)
-    tab.tableStyleInfo = style
-    ws.add_table(tab)
-
-    ws.freeze_panes = 'A2'
-
-    for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
-            except:
-                pass
-        adjusted_width = (max_length + 2)
-        ws.column_dimensions[column_letter].width = adjusted_width
-
-    filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    wb.save(filename)
-    print(f"Excel отчет создан: {filename}")
-
-    return filename
+    except Exception as e:
+        if str(e) == "Processing cancelled by user":
+            abort(499, description="Processing cancelled by user")
+        raise e
+    finally:
+        try:
+            wb.close()  # Попытка закрыть workbook в любом случае
+        except:
+            pass
 
 
 if __name__ == '__main__':
