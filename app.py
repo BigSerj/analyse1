@@ -397,7 +397,11 @@ def create_excel_report(data, store_id, end_date, planning_days):
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
         
-        for row, item in enumerate(data['rows'], start=2):
+        # Создаем список для хранения всех данных
+        rows_data = []
+        
+        # Собираем все данные
+        for item in data['rows']:
             check_if_cancelled()
             assortment = item.get('assortment', {})
             assortment_meta = assortment.get('meta', {})
@@ -406,36 +410,50 @@ def create_excel_report(data, store_id, end_date, planning_days):
             is_variant = '/variant/' in assortment_href
             variant_id = assortment_href.split('/variant/')[-1] if is_variant else assortment_href.split('/product/')[-1]
             
-            # Заполняем основные данные
-            ws.cell(row=row, column=1, value=assortment.get('name', ''))
-            ws.cell(row=row, column=2, value=item.get('sellQuantity', 0))
-            ws.cell(row=row, column=3, value=round(item.get('profit', 0) / 100, 2))
+            row_data = {
+                'name': assortment.get('name', ''),
+                'quantity': item.get('sellQuantity', 0),
+                'profit': round(item.get('profit', 0) / 100, 2),
+                'sales_speed': 0,
+                'forecast': '',
+                'group_uuid': '',
+                'group_name': '',
+                'group_path': ''
+            }
             
             if variant_id:
                 sales_speed, group_uuid, group_name = get_sales_speed(variant_id, store_id, end_date, is_variant)
                 if sales_speed != 0:
-                    ws.cell(row=row, column=4, value=sales_speed)
-                    ws.cell(row=row, column=5).value = sales_speed * planning_days
+                    row_data['sales_speed'] = sales_speed
+                    row_data['forecast'] = sales_speed * planning_days
                 else:
-                    ws.cell(row=row, column=4, value="Нет данных")
-                    ws.cell(row=row, column=5, value="")
-                    
-                # Записываем UUID группы и название группы
-                ws.cell(row=row, column=6, value=group_uuid)
-                ws.cell(row=row, column=7, value=group_name)
+                    row_data['sales_speed'] = "Нет данных"
+                    row_data['forecast'] = ""
                 
-                # Получаем и записываем путь группы из существующей структуры
-                group_path = get_group_path(group_uuid, product_groups)
-                ws.cell(row=row, column=8, value=group_path)
+                row_data['group_uuid'] = group_uuid
+                row_data['group_name'] = group_name
+                row_data['group_path'] = get_group_path(group_uuid, product_groups)
             else:
-                ws.cell(row=row, column=4, value="Ошибка")
-                ws.cell(row=row, column=5, value="")
-                ws.cell(row=row, column=6, value="")
-                ws.cell(row=row, column=7, value="")
-                ws.cell(row=row, column=8, value="")
+                row_data['sales_speed'] = "Ошибка"
+            
+            rows_data.append(row_data)
+        
+        # Сортируем данные по UUID группы по убыванию
+        rows_data.sort(key=lambda x: x['group_uuid'] if x['group_uuid'] else '', reverse=True)
+        
+        # Записываем отсортированные данные в Excel
+        for row, row_data in enumerate(rows_data, start=2):
+            ws.cell(row=row, column=1, value=row_data['name'])
+            ws.cell(row=row, column=2, value=row_data['quantity'])
+            ws.cell(row=row, column=3, value=row_data['profit'])
+            ws.cell(row=row, column=4, value=row_data['sales_speed'])
+            ws.cell(row=row, column=5, value=row_data['forecast'])
+            ws.cell(row=row, column=6, value=row_data['group_uuid'])
+            ws.cell(row=row, column=7, value=row_data['group_name'])
+            ws.cell(row=row, column=8, value=row_data['group_path'])
 
-        # Обновляем диапазон таблицы, включая новый столбец
-        table_ref = f"A1:H{len(data['rows']) + 1}"
+        # Обновляем диапазон таблицы
+        table_ref = f"A1:H{len(rows_data) + 1}"
         tab = Table(displayName="Table1", ref=table_ref)
         style = TableStyleInfo(
             name="TableStyleMedium9",
