@@ -69,6 +69,22 @@
             margin-top: 10px;
             color: #666;
         }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .form-group input[type="number"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
@@ -110,6 +126,15 @@
         <div class="add-group-section">
             <button type="button" class="add-group-btn" onclick="addNewGroupContainer()">+ Добавить группу товаров</button>
         </div>
+        
+        <hr>
+        
+        <div class="form-group">
+            <label for="planning_days">Дней планирования закупки:</label>
+            <input type="number" id="planning_days" name="planning_days" value="30" min="1" required>
+        </div>
+        
+        <hr>
         
         <div class="buttons-container">
             <button type="submit" id="submit-btn" class="submit-btn">Сформировать отчет</button>
@@ -363,3 +388,4 @@
         {% endif %}
     {% endfor %}
 {% endmacro %}
+

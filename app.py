@@ -34,25 +34,22 @@ def render_group_options(groups, level=0):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    
     if request.method == 'POST':
         start_date = request.form['start_date']
         end_date = request.form['end_date']
         store_id = request.form['store_id']
-        # Получаем список ID групп из строки, разделенной запятыми
+        planning_days = int(request.form['planning_days'])  # Получаем количество дней
         product_groups = request.form['product_group'].split(',') if request.form['product_group'] else []
         
-        print(f"Received form data: start_date={start_date}, end_date={end_date}, store_id={store_id}, product_groups={product_groups}")
+        print(f"Received form data: start_date={start_date}, end_date={end_date}, store_id={store_id}, product_groups={product_groups}, planning_days={planning_days}")
         
         try:
             report_data = get_report_data(start_date, end_date, store_id, product_groups)
             
-            # print(f"Полученные данные: {json.dumps(report_data, indent=2, ensure_ascii=False)}")
-            
             if not report_data or 'rows' not in report_data or not report_data['rows']:
                 return "Нет данных для формирования отчета для выбранных параметров", 404
             
-            excel_file = create_excel_report(report_data, store_id, end_date)
+            excel_file = create_excel_report(report_data, store_id, end_date, planning_days)  # Передаем planning_days
             
             return send_file(excel_file, as_attachment=True, download_name='profitability_report.xlsx')
         except Exception as e:
@@ -302,7 +299,7 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     
     response = requests.get(full_url, headers=headers)
     if response.status_code != 200:
-        print(f"Ошибка при получении данных о продажах: {response.status_code}. Ответ сервера: {response.text}")
+        print(f"Ошибка пр получении данных о продажах: {response.status_code}. Ответ сервера: {response.text}")
         return 0, 0, 0
 
     data = response.json()
@@ -357,58 +354,64 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
 
     return sales_speed
 
-def create_excel_report(data, store_id, end_date):
+def create_excel_report(data, store_id, end_date, planning_days):
     try:
         print("Начало создания Excel отчета")
         wb = Workbook()
         ws = wb.active
         ws.title = "Отчет прибыльности"
 
-        headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж']
+        # Обновляем заголовки
+        headers = ['Наименование', 'Количество', 'Прибыльность', 'Скорость продаж', f'Прогноз на {planning_days} дней']
         for col, header in enumerate(headers, start=1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
         
         for row, item in enumerate(data['rows'], start=2):
-            check_if_cancelled()  # Проверяем отмену
+            check_if_cancelled()
             assortment = item.get('assortment', {})
             assortment_meta = assortment.get('meta', {})
             assortment_href = assortment_meta.get('href', '')
             
             is_variant = '/variant/' in assortment_href
+            variant_id = assortment_href.split('/variant/')[-1] if is_variant else assortment_href.split('/product/')[-1]
             
-            if is_variant:
-                variant_id = assortment_href.split('/variant/')[-1]
-            else:
-                variant_id = assortment_href.split('/product/')[-1]
-            
-            print(f"\nОбработка товара: {assortment.get('name', '')}")
-            print(f"ID товара/модификации: {variant_id}")
-            print(f"Тип: {'Модификация' if is_variant else 'Товар'}")
-            print(f"Количество продаж: {item.get('sellQuantity', 0)}")
-            print(f"Прибыль: {round(item.get('profit', 0) / 100, 2)}")
-            
+            # Заполняем основные данные
             ws.cell(row=row, column=1, value=assortment.get('name', ''))
             ws.cell(row=row, column=2, value=item.get('sellQuantity', 0))
             ws.cell(row=row, column=3, value=round(item.get('profit', 0) / 100, 2))
             
             if variant_id:
-                print(f"Получение данных о продажах для товара: {assortment.get('name', '')}, ID: {variant_id}")
                 sales_speed = get_sales_speed(variant_id, store_id, end_date, is_variant)
-                ws.cell(row=row, column=4, value=sales_speed if sales_speed != 0 else "Нет данных")
+                if sales_speed != 0:
+                    ws.cell(row=row, column=4, value=sales_speed)
+                    # Используем переданное количество дней вместо фиксированного значения 30
+                    ws.cell(row=row, column=5).value = sales_speed * planning_days
+                else:
+                    ws.cell(row=row, column=4, value="Нет данных")
+                    ws.cell(row=row, column=5, value="")
             else:
-                print(f"Не удалось получить ID для товара: {assortment.get('name', '')}")
                 ws.cell(row=row, column=4, value="Ошибка")
+                ws.cell(row=row, column=5, value="")
 
-        tab = Table(displayName="Table1", ref=f"A1:D{len(data['rows']) + 1}")
-        style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
-                               showLastColumn=False, showRowStripes=True, showColumnStripes=False)
+        # Создаем таблицу после заполнения данных
+        table_ref = f"A1:E{len(data['rows']) + 1}"
+        tab = Table(displayName="Table1", ref=table_ref)
+        style = TableStyleInfo(
+            name="TableStyleMedium9",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False
+        )
         tab.tableStyleInfo = style
         ws.add_table(tab)
 
+        # Форматирование
         ws.freeze_panes = 'A2'
-
+        
+        # Автоподбор ширины столбцов
         for column in ws.columns:
             max_length = 0
             column_letter = column[0].column_letter
@@ -423,14 +426,9 @@ def create_excel_report(data, store_id, end_date):
 
         filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
-        try:
-            wb.save(filename)
-            wb.close()  # Явно закрываем workbook
-            print(f"Excel отчет создан: {filename}")
-            return filename
-        except Exception as e:
-            print(f"Ошибка при сохранении файла: {str(e)}")
-            raise e
+        wb.save(filename)
+        wb.close()
+        return filename
         
     except Exception as e:
         if str(e) == "Processing cancelled by user":
@@ -438,7 +436,7 @@ def create_excel_report(data, store_id, end_date):
         raise e
     finally:
         try:
-            wb.close()  # Попытка закрыть workbook в любом случае
+            wb.close()
         except:
             pass
 
