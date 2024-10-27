@@ -4,7 +4,8 @@ from markupsafe import Markup
 import requests
 from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Alignment  # Добавим импорт в начало файла
+from openpyxl.worksheet.hyperlink import Hyperlink  # Обновленный импорт
 from datetime import datetime, timedelta
 import json
 import threading
@@ -38,7 +39,7 @@ def index():
         start_date = request.form['start_date']
         end_date = request.form['end_date']
         store_id = request.form['store_id']
-        planning_days = int(request.form['planning_days'])  # Получаем количество дней
+        planning_days = int(request.form['planning_days'])  # Получаем количетво дней
         product_groups = request.form['product_group'].split(',') if request.form['product_group'] else []
         
         print(f"Received form data: start_date={start_date}, end_date={end_date}, store_id={store_id}, product_groups={product_groups}, planning_days={planning_days}")
@@ -225,7 +226,7 @@ def get_product_groups():
                 break
             offset += limit
         else:
-            error_message = f"Ошибка при получении писка групп товаров: {response.status_code}. Ответ сервера: {response.text}"
+            error_message = f"Ошибка при получении ска групп товаров: {response.status_code}. Ответ сервера: {response.text}"
             print(error_message)
             raise Exception(error_message)
 
@@ -299,8 +300,8 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     
     response = requests.get(full_url, headers=headers)
     if response.status_code != 200:
-        print(f"Ошибка при получении данных о проажах: {response.status_code}. Ответ ервера: {response.text}")
-        return 0, '', ''  # Возвращаем 0 для скорости и пустую строку для UUID
+        print(f"Ошибка пи получении данных о проажах: {response.status_code}. Ответ ервера: {response.text}")
+        return 0, '', '', '', ''  # Возвращаем 0 для скорости и пустую строку для UUID
 
     data = response.json()
     rows = data.get('rows', [])
@@ -315,6 +316,16 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
         group_uuid = group_href.split('/')[-1] if group_href else ''
         group_name = product_folder.get('name', '')  # Получаем название группы
         print(f"Found group UUID: {group_uuid}, name: {group_name}")
+
+    # олучаем UUID и сылку на товар из первой строки данных
+    product_uuid = ''
+    product_href = ''
+    if rows:
+        assortment = rows[0].get('assortment', {})
+        product_meta = assortment.get('meta', {})
+        product_href = product_meta.get('uuidHref', '')
+        if product_href:
+            product_uuid = product_href.split('/')[-1]
 
     # Фильтрация по UUID модификации
     filtered_rows = [
@@ -361,9 +372,9 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     else:
         sales_speed = 0
 
-    print(f"sales_speed: {sales_speed}, group_uuid: {group_uuid}, group_name: {group_name}")
+    print(f"sales_speed: {sales_speed}, group_uuid: {group_uuid}, product_href: {product_href}")
 
-    return sales_speed, group_uuid, group_name  # Возвращаем также название группы
+    return sales_speed, group_uuid, group_name, product_uuid, product_href
 
 def get_group_path(group_uuid, product_groups, get_uuid=False):
     def find_group_path(groups, target_uuid, current_path=[], current_uuid_path=[]):
@@ -385,12 +396,35 @@ def get_group_path(group_uuid, product_groups, get_uuid=False):
     names_path, uuid_path = path
     return ('/'.join(names_path), uuid_path) if not get_uuid else ('/'.join(uuid_path), uuid_path)
 
+def get_sheet_name(products_data):
+    # Получаем уникальные названи второго уровня
+    level2_names = set()
+    for product in products_data:
+        names_by_level = product['names_by_level']
+        if len(names_by_level) > 1:  # Есл есь второй уровень
+            level2_names.add(names_by_level[1])
+    
+    # Сортируем имена для консистентности
+    level2_names = sorted(list(level2_names))
+    
+    # Формируем название листа с новым разделителем
+    if len(level2_names) > 5:
+        sheet_name = ', '.join(level2_names[:5])
+    else:
+        sheet_name = ', '.join(level2_names)
+    
+    # Ограничиваем длину названия листа (максимум 31 символ в Excel)
+    if len(sheet_name) > 31:
+        sheet_name = sheet_name[:28] + "..."
+    
+    # Если название пустое, используем значение по умолчанию
+    return sheet_name if sheet_name else "Отчет приб��льности"
+
 def create_excel_report(data, store_id, end_date, planning_days):
     try:
         print("Начало создания Excel отчета")
         wb = Workbook()
         ws = wb.active
-        ws.title = "Отчет прибыльности"
         
         product_groups = get_product_groups()
         products_data = []
@@ -407,7 +441,7 @@ def create_excel_report(data, store_id, end_date, planning_days):
             variant_id = assortment_href.split('/variant/')[-1] if is_variant else assortment_href.split('/product/')[-1]
             
             if variant_id:
-                sales_speed, group_uuid, group_name = get_sales_speed(variant_id, store_id, end_date, is_variant)
+                sales_speed, group_uuid, group_name, product_uuid, product_href = get_sales_speed(variant_id, store_id, end_date, is_variant)
                 if sales_speed != 0:
                     full_path, uuid_path = get_group_path(group_uuid, product_groups)
                     max_depth = max(max_depth, len(uuid_path))  # Используем длину списка UUID
@@ -421,19 +455,21 @@ def create_excel_report(data, store_id, end_date, planning_days):
                         'group_uuid': group_uuid,
                         'group_path': full_path,
                         'uuid_path': uuid_path,  # Сохраняем список UUID для правильного определения уровней
-                        'names_by_level': get_names_by_uuid(uuid_path, product_groups)  # Получаем имена для каждого уровня
+                        'names_by_level': get_names_by_uuid(uuid_path, product_groups),
+                        'product_uuid': product_uuid,
+                        'product_href': product_href
                     })
 
         print(f"Максимальная глубина групп: {max_depth}")
 
-        # Сортируем данные по полному пути групп по быванию
-        products_data.sort(key=lambda x: x['group_path'], reverse=True)
+        # Сортируем данные по полному пути групп по возрастанию
+        products_data.sort(key=lambda x: x['group_path'])
 
-        # Формируем заголовки с учетом реальной глубины
-        group_level_headers = [f'Уровень {i+1}' for i in range(max_depth)]
+        # Формируем заголовки с учетом реальной глубины, начиная со второго уровня
+        group_level_headers = [f'Уровень {i+2}' for i in range(max_depth-1)] if max_depth > 1 else []
         headers = group_level_headers + [
-            'UUID группы',  # Добавляем новый заголовок
-            'Наимеование', 'Количество', 'Прибыльность', 'Скорость продаж', 
+            'UUID',  # Изменено название столбца
+            'Наименоване', 'Количество', 'Прибыльность', 'Скорость продаж', 
             f'Прогноз на {planning_days} дней'
         ]
         
@@ -454,24 +490,32 @@ def create_excel_report(data, store_id, end_date, planning_days):
             # Записываем строки групп, если путь изменился
             for i, uuid in enumerate(uuid_path):
                 if i >= len(current_uuid_path) or uuid != current_uuid_path[i]:
-                    # Записываем новую группу в соответствующую колонку
-                    ws.cell(row=current_row, column=i+1, value=names_by_level[i])
-                    # Записываем UUID группы
-                    ws.cell(row=current_row, column=max_depth+1, value=uuid)
+                    if i > 0:
+                        ws.cell(row=current_row, column=i, value=names_by_level[i])
+                    # Записываем UUID группы полностью
+                    uuid_cell = ws.cell(row=current_row, column=max_depth, value=uuid)
+                    uuid_cell.alignment = Alignment(horizontal='left', shrink_to_fit=False)
                     current_row += 1
             
-            # Записываем данные товара
-            ws.cell(row=current_row, column=max_depth+2, value=product['name'])
-            ws.cell(row=current_row, column=max_depth+3, value=product['quantity'])
-            ws.cell(row=current_row, column=max_depth+4, value=product['profit'])
-            ws.cell(row=current_row, column=max_depth+5, value=product['sales_speed'])
-            ws.cell(row=current_row, column=max_depth+6, value=product['forecast'])
+            # При записи UUID товара
+            uuid_cell = ws.cell(row=current_row, column=max_depth)
+            if product['product_href']:
+                uuid_cell.value = product['product_uuid']  # Записываем полный UUID
+                uuid_cell.hyperlink = product['product_href']
+                uuid_cell.font = Font(color="0000FF", underline="single")
+                uuid_cell.alignment = Alignment(horizontal='left', shrink_to_fit=False)
+            
+            ws.cell(row=current_row, column=max_depth+1, value=product['name'])
+            ws.cell(row=current_row, column=max_depth+2, value=product['quantity'])
+            ws.cell(row=current_row, column=max_depth+3, value=product['profit'])
+            ws.cell(row=current_row, column=max_depth+4, value=product['sales_speed'])
+            ws.cell(row=current_row, column=max_depth+5, value=product['forecast'])
             
             current_row += 1
             current_uuid_path = uuid_path
 
         # Обновляем диапазон таблицы с учетом реальной глубины
-        last_col = max_depth + 6  # 6 - количество основных столбцов с учетом нового столбца UUID
+        last_col = max_depth + 5  # 5 - количество основных столбцов с учетом нового столбца UUID
         table_ref = f"A1:{chr(64 + last_col)}{current_row-1}"
         tab = Table(displayName="Table1", ref=table_ref)
         style = TableStyleInfo(
@@ -492,9 +536,14 @@ def create_excel_report(data, store_id, end_date, planning_days):
             max_length = 0
             column_letter = column[0].column_letter
             
-            # Если это столбец "UUID группы" (max_depth + 1)
-            if column[0].column == max_depth + 1:
+            # Если это столбец "UUID" (max_depth)
+            if column[0].column == max_depth:
                 ws.column_dimensions[column_letter].width = 3
+                # Применяем настройки отображения ко всем ячейкам в столбце
+                for cell in column:
+                    if isinstance(cell.hyperlink, str):  # Если есть ссылка
+                        cell.font = Font(color="0000FF", underline="single")
+                    cell.alignment = Alignment(horizontal='left', shrink_to_fit=False)
                 continue
                 
             for cell in column:
@@ -506,6 +555,11 @@ def create_excel_report(data, store_id, end_date, planning_days):
             adjusted_width = (max_length + 2)
             ws.column_dimensions[column_letter].width = adjusted_width
 
+        # После сбора всех данных и перед созданием заголовков
+        sheet_name = get_sheet_name(products_data)
+        ws.title = sheet_name
+        print(f"Название листа: {sheet_name}")
+        
         filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
         wb.save(filename)
