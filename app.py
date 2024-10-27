@@ -299,7 +299,7 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     
     response = requests.get(full_url, headers=headers)
     if response.status_code != 200:
-        print(f"Ошибка при получении данных о проажах: {response.status_code}. Ответ сервера: {response.text}")
+        print(f"Ошибка при получении данных о проажах: {response.status_code}. Ответ ервера: {response.text}")
         return 0, '', ''  # Возвращаем 0 для скорости и пустую строку для UUID
 
     data = response.json()
@@ -380,10 +380,10 @@ def get_group_path(group_uuid, product_groups, get_uuid=False):
 
     path = find_group_path(product_groups, group_uuid)
     if not path:
-        return ''
+        return '', []  # Возвращаем пустую строку и пустой список UUID
     
     names_path, uuid_path = path
-    return '/'.join(uuid_path) if get_uuid else '/'.join(names_path)
+    return ('/'.join(names_path), uuid_path) if not get_uuid else ('/'.join(uuid_path), uuid_path)
 
 def create_excel_report(data, store_id, end_date, planning_days):
     try:
@@ -392,11 +392,11 @@ def create_excel_report(data, store_id, end_date, planning_days):
         ws = wb.active
         ws.title = "Отчет прибыльности"
         
-        # Получаем структуру групп один раз
         product_groups = get_product_groups()
-
-        # Собираем все данные сначала
-        rows_data = []
+        products_data = []
+        max_depth = 0
+        
+        # Сначала собираем все данные и определяем максимальную глубину
         for item in data['rows']:
             check_if_cancelled()
             assortment = item.get('assortment', {})
@@ -406,52 +406,35 @@ def create_excel_report(data, store_id, end_date, planning_days):
             is_variant = '/variant/' in assortment_href
             variant_id = assortment_href.split('/variant/')[-1] if is_variant else assortment_href.split('/product/')[-1]
             
-            row_data = {
-                'name': assortment.get('name', ''),
-                'quantity': item.get('sellQuantity', 0),
-                'profit': round(item.get('profit', 0) / 100, 2),
-                'sales_speed': 0,
-                'forecast': '',
-                'group_uuid': '',
-                'group_name': '',
-                'group_path': ''
-            }
-            
             if variant_id:
                 sales_speed, group_uuid, group_name = get_sales_speed(variant_id, store_id, end_date, is_variant)
                 if sales_speed != 0:
-                    row_data['sales_speed'] = sales_speed
-                    row_data['forecast'] = sales_speed * planning_days
-                else:
-                    row_data['sales_speed'] = "Нет данных"
-                    row_data['forecast'] = ""
-                
-                row_data['group_uuid'] = group_uuid
-                row_data['group_name'] = group_name
-                row_data['group_path'] = get_group_path(group_uuid, product_groups, get_uuid=False)
-            else:
-                row_data['sales_speed'] = "Ошибка"
-            
-            rows_data.append(row_data)
-        
-        # Сортируем данные по UUID группы по убыванию
-        rows_data.sort(key=lambda x: x['group_uuid'] if x['group_uuid'] else '', reverse=True)
-        
-        # Находим максимальную глубину пути в группах
-        max_depth = 0
-        for row_data in rows_data:
-            path = row_data['group_path']
-            if path:
-                depth = len(path.split('/'))
-                max_depth = max(max_depth, depth)
-        
-        print(f"Максимальная глубина пути: {max_depth}")
-        
-        # Формируем заголовки с учетом глубины
+                    full_path, uuid_path = get_group_path(group_uuid, product_groups)
+                    max_depth = max(max_depth, len(uuid_path))  # Используем длину списка UUID
+                    
+                    products_data.append({
+                        'name': assortment.get('name', ''),
+                        'quantity': item.get('sellQuantity', 0),
+                        'profit': round(item.get('profit', 0) / 100, 2),
+                        'sales_speed': sales_speed,
+                        'forecast': sales_speed * planning_days,
+                        'group_uuid': group_uuid,
+                        'group_path': full_path,
+                        'uuid_path': uuid_path,  # Сохраняем список UUID для правильного определения уровней
+                        'names_by_level': get_names_by_uuid(uuid_path, product_groups)  # Получаем имена для каждого уровня
+                    })
+
+        print(f"Максимальная глубина групп: {max_depth}")
+
+        # Сортируем данные по полному пути групп по быванию
+        products_data.sort(key=lambda x: x['group_path'], reverse=True)
+
+        # Формируем заголовки с учетом реальной глубины
         group_level_headers = [f'Уровень {i+1}' for i in range(max_depth)]
         headers = group_level_headers + [
-            'Наименование', 'Количество', 'Прибыльность', 'Скорость продаж', 
-            f'Прогноз на {planning_days} дней', 'UUID группы'
+            'UUID группы',  # Добавляем новый заголовок
+            'Наимеование', 'Количество', 'Прибыльность', 'Скорость продаж', 
+            f'Прогноз на {planning_days} дней'
         ]
         
         # Записываем заголовки
@@ -459,27 +442,37 @@ def create_excel_report(data, store_id, end_date, planning_days):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
-        
-        # Записываем данные
-        for row_idx, row_data in enumerate(rows_data, start=2):
-            # Заполняем уровни групп
-            if row_data['group_path']:
-                groups = row_data['group_path'].split('/')
-                for level, group in enumerate(groups):
-                    ws.cell(row=row_idx, column=level+1, value=group)
-            
-            # Смещаем все остальные столбцы вправо на max_depth
-            base_col = max_depth + 1
-            ws.cell(row=row_idx, column=base_col, value=row_data['name'])
-            ws.cell(row=row_idx, column=base_col + 1, value=row_data['quantity'])
-            ws.cell(row=row_idx, column=base_col + 2, value=row_data['profit'])
-            ws.cell(row=row_idx, column=base_col + 3, value=row_data['sales_speed'])
-            ws.cell(row=row_idx, column=base_col + 4, value=row_data['forecast'])
-            ws.cell(row=row_idx, column=base_col + 5, value=row_data['group_uuid'])
 
-        # Обновляем диапазон таблицы с учетом новых столбцов
-        last_col = max_depth + 6  # 6 - количество оставшихся столбцов
-        table_ref = f"A1:{chr(64 + last_col)}{len(rows_data) + 1}"
+        # Записываем данные с группами
+        current_row = 2
+        current_uuid_path = []
+        
+        for product in products_data:
+            uuid_path = product['uuid_path']
+            names_by_level = product['names_by_level']
+            
+            # Записываем строки групп, если путь изменился
+            for i, uuid in enumerate(uuid_path):
+                if i >= len(current_uuid_path) or uuid != current_uuid_path[i]:
+                    # Записываем новую группу в соответствующую колонку
+                    ws.cell(row=current_row, column=i+1, value=names_by_level[i])
+                    # Записываем UUID группы
+                    ws.cell(row=current_row, column=max_depth+1, value=uuid)
+                    current_row += 1
+            
+            # Записываем данные товара
+            ws.cell(row=current_row, column=max_depth+2, value=product['name'])
+            ws.cell(row=current_row, column=max_depth+3, value=product['quantity'])
+            ws.cell(row=current_row, column=max_depth+4, value=product['profit'])
+            ws.cell(row=current_row, column=max_depth+5, value=product['sales_speed'])
+            ws.cell(row=current_row, column=max_depth+6, value=product['forecast'])
+            
+            current_row += 1
+            current_uuid_path = uuid_path
+
+        # Обновляем диапазон таблицы с учетом реальной глубины
+        last_col = max_depth + 6  # 6 - количество основных столбцов с учетом нового столбца UUID
+        table_ref = f"A1:{chr(64 + last_col)}{current_row-1}"
         tab = Table(displayName="Table1", ref=table_ref)
         style = TableStyleInfo(
             name="TableStyleMedium9",
@@ -498,6 +491,12 @@ def create_excel_report(data, store_id, end_date, planning_days):
         for column in ws.columns:
             max_length = 0
             column_letter = column[0].column_letter
+            
+            # Если это столбец "UUID группы" (max_depth + 1)
+            if column[0].column == max_depth + 1:
+                ws.column_dimensions[column_letter].width = 3
+                continue
+                
             for cell in column:
                 try:
                     if len(str(cell.value)) > max_length:
@@ -523,6 +522,18 @@ def create_excel_report(data, store_id, end_date, planning_days):
         except:
             pass
 
+def get_names_by_uuid(uuid_path, product_groups):
+    def find_name_by_uuid(groups, target_uuid):
+        for group in groups:
+            if group['id'] == target_uuid:
+                return group['name']
+            if group.get('children'):
+                name = find_name_by_uuid(group['children'], target_uuid)
+                if name:
+                    return name
+        return None
+
+    return [find_name_by_uuid(product_groups, uuid) or '' for uuid in uuid_path]
 
 if __name__ == '__main__':
     app.run(debug=True)
