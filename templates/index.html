@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отчет прибыльности МойСклад</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        form { max-width: 400px; margin: 0 auto; }
+        label, input, select { display: block; margin-bottom: 10px; width: 100%; }
+        input[type="submit"] { background-color: #4CAF50; color: white; padding: 10px; border: none; cursor: pointer; }
+        #group-selects { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Отчет прибыльности по товарам</h1>
+    <form method="POST" action="{{ url_for('index') }}">
+        <label for="start_date">Дата начала:</label>
+        <input type="date" id="start_date" name="start_date" required>
+        
+        <label for="end_date">Дата окончания:</label>
+        <input type="date" id="end_date" name="end_date" required>
+        
+        <label for="store_id">Склад:</label>
+        <select id="store_id" name="store_id" required>
+            {% for store in stores %}
+                <option value="{{ store.id }}">{{ store.name }}</option>
+            {% endfor %}
+        </select>
+        
+        <label>Группа товаров:</label>
+        <div id="group-selects">
+            <select id="group-select-0" onchange="loadSubgroups(this, 0)">
+                <option value="">Выберите группу</option>
+                {% for group in product_groups %}
+                    <option value="{{ group.id }}" data-children='{{ group.children | tojson | forceescape }}'>{{ group.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <input type="hidden" id="selected-group" name="product_group" value="">
+        
+        <button type="submit">Сформировать отчет</button>
+    </form>
+
+    <script>
+        function loadSubgroups(select, level) {
+            const groupId = select.value;
+            document.getElementById('selected-group').value = groupId;
+            
+            // Удаляем все следующие селекты
+            const groupSelects = document.getElementById('group-selects');
+            while (groupSelects.children.length > level + 1) {
+                groupSelects.removeChild(groupSelects.lastChild);
+            }
+            
+            if (groupId) {
+                const selectedOption = select.options[select.selectedIndex];
+                const children = JSON.parse(selectedOption.dataset.children);
+                
+                if (children.length > 0) {
+                    const newSelect = document.createElement('select');
+                    newSelect.id = `group-select-${level + 1}`;
+                    newSelect.onchange = function() { loadSubgroups(this, level + 1); };
+                    
+                    const defaultOption = document.createElement('option');
+                    defaultOption.value = "";
+                    defaultOption.textContent = "Выберите подгруппу";
+                    newSelect.appendChild(defaultOption);
+                    
+                    children.forEach(subgroup => {
+                        const option = document.createElement('option');
+                        option.value = subgroup.id;
+                        option.textContent = subgroup.name;
+                        option.dataset.children = JSON.stringify(subgroup.children);
+                        newSelect.appendChild(option);
+                    });
+                    
+                    groupSelects.appendChild(newSelect);
+                }
+            }
+        }
+
+        // Инициализация первого выпадающего списка
+        document.addEventListener('DOMContentLoaded', function() {
+            const firstSelect = document.getElementById('group-select-0');
+            firstSelect.onchange = function() { loadSubgroups(this, 0); };
+        });
+    </script>
+</body>
+</html>
+
+{% macro render_group_options(groups, level=0) %}
+    {% for group in groups %}
+        <option value="{{ group.id }}" {% if level > 0 %}class="nested-select" style="margin-left: {{ level * 20 }}px;"{% endif %}>
+            {{ '—' * level }} {{ group.name }}
+        </option>
+        {% if group.children %}
+            {{ render_group_options(group.children, level + 1) }}
+        {% endif %}
+    {% endfor %}
+{% endmacro %}
