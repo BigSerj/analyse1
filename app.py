@@ -35,6 +35,7 @@ def render_group_options(groups, level=0):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     print("HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! ")
+    print("HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! HELLO! ")
     if request.method == 'POST':
         start_date = request.form['start_date']
         end_date = request.form['end_date']
