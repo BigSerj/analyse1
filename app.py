@@ -50,7 +50,7 @@ def index():
             if not report_data or 'rows' not in report_data or not report_data['rows']:
                 return "Нет данных для формирования отчета для выбранных параметров", 404
             
-            excel_file = create_excel_report(report_data, store_id, end_date, planning_days)  # Передаем planning_days
+            excel_file = create_excel_report(report_data, store_id, end_date, planning_days)  # Предаем planning_days
             
             return send_file(excel_file, as_attachment=True, download_name='profitability_report.xlsx')
         except Exception as e:
@@ -246,7 +246,7 @@ def build_group_hierarchy(groups):
             'parent': None
         }
 
-    # Второй проход: устанавливаем связи родитель-потомок
+    # Второй проход: устанавливае связи ртель-потомок
     for group in groups:
         group_id = group['id']
         parent_href = group.get('productFolder', {}).get('meta', {}).get('href')
@@ -306,32 +306,32 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     data = response.json()
     rows = data.get('rows', [])
 
-    # Получаем UUID группы и название группы из первой строки данных
-    group_uuid = ''
-    group_name = ''
-    if rows:
-        assortment = rows[0].get('assortment', {})
-        product_folder = assortment.get('productFolder', {})
-        group_href = product_folder.get('meta', {}).get('href', '')
-        group_uuid = group_href.split('/')[-1] if group_href else ''
-        group_name = product_folder.get('name', '')  # Получаем название группы
-        print(f"Found group UUID: {group_uuid}, name: {group_name}")
-
-    # олучаем UUID и сылку на товар из первой строки данных
-    product_uuid = ''
-    product_href = ''
-    if rows:
-        assortment = rows[0].get('assortment', {})
-        product_meta = assortment.get('meta', {})
-        product_href = product_meta.get('uuidHref', '')
-        if product_href:
-            product_uuid = product_href.split('/')[-1]
-
     # Фильтрация по UUID модификации
     filtered_rows = [
         row for row in rows
         if row.get('assortment', {}).get('meta', {}).get('href', '').split('/')[-1] == variant_id
     ]
+
+    # Получаем UUID группы и название группы из отфильтрованных данных
+    group_uuid = ''
+    group_name = ''
+    product_uuid = ''
+    product_href = ''
+    
+    if filtered_rows:
+        assortment = filtered_rows[0].get('assortment', {})
+        product_folder = assortment.get('productFolder', {})
+        group_href = product_folder.get('meta', {}).get('href', '')
+        group_uuid = group_href.split('/')[-1] if group_href else ''
+        group_name = product_folder.get('name', '')
+        
+        # Получаем UUID и ссылку на товар из отфильтрованной строки
+        product_meta = assortment.get('meta', {})
+        product_href = product_meta.get('uuidHref', '')
+        if product_href:
+            product_uuid = product_meta.get('href', '').split('/')[-1]
+        
+        print(f"Found group UUID: {group_uuid}, name: {group_name}")
 
     # Сортировка операций по дате
     filtered_rows.sort(key=lambda x: datetime.fromisoformat(x['operation']['moment'].replace('Z', '+00:00')))
@@ -418,7 +418,7 @@ def get_sheet_name(products_data):
         sheet_name = sheet_name[:28] + "..."
     
     # Если название пустое, используем значение по умолчанию
-    return sheet_name if sheet_name else "Отчет приб��льности"
+    return sheet_name if sheet_name else "Отчет прибльности"
 
 def create_excel_report(data, store_id, end_date, planning_days):
     try:
@@ -465,7 +465,7 @@ def create_excel_report(data, store_id, end_date, planning_days):
         # Сортируем данные по полному пути групп по возрастанию
         products_data.sort(key=lambda x: x['group_path'])
 
-        # Формируем заголовки с учетом реальной глубины, начиная со второго уровня
+        # Формируем заголовки с учетом реальной глубины, начиная со вворого уровня
         group_level_headers = [f'Уровень {i+2}' for i in range(max_depth-1)] if max_depth > 1 else []
         headers = group_level_headers + [
             'UUID',  # Изменено название столбца
@@ -497,7 +497,7 @@ def create_excel_report(data, store_id, end_date, planning_days):
                     uuid_cell.alignment = Alignment(horizontal='left', shrink_to_fit=False)
                     current_row += 1
             
-            # При записи UUID товара
+            # При запис�� UUID товара
             uuid_cell = ws.cell(row=current_row, column=max_depth)
             if product['product_href']:
                 uuid_cell.value = product['product_uuid']  # Записываем полный UUID
@@ -528,6 +528,56 @@ def create_excel_report(data, store_id, end_date, planning_days):
         tab.tableStyleInfo = style
         ws.add_table(tab)
 
+        # После записи всех данных и перед форматированием добавляем группировку
+        ws.sheet_properties.outlinePr.summaryBelow = False  # Устанавливаем кнопку группировки сверху
+
+        # Функция для определения диапазонов групп
+        def find_groups(ws, start_row, end_row, max_depth):
+            groups = []  # [(start_row, end_row, level, group_name)]
+            
+            # Проходим по каждой строке
+            for row in range(start_row, end_row + 1):
+                # Проверяем каждый уровень
+                for level in range(1, max_depth + 1):
+                    value = ws.cell(row=row, column=level).value
+                    if value is not None:
+                        # Находим конец группы (последнюю строку перед следующей группой того же или более высокого уровня)
+                        end_group_row = row
+                        for next_row in range(row + 1, end_row + 1):
+                            # Проверяем, не началась ли новая группа того же или более высокого уровня
+                            found_higher_level = False
+                            for check_level in range(1, level + 1):
+                                if ws.cell(row=next_row, column=check_level).value is not None:
+                                    found_higher_level = True
+                                    break
+                            if found_higher_level:
+                                end_group_row = next_row - 1
+                                break
+                            end_group_row = next_row
+                        
+                        groups.append((row, end_group_row, level, value))
+            
+            return groups
+
+        # Находим все группы
+        groups = find_groups(ws, 2, current_row - 1, max_depth)
+
+        # Сортируем группы по уровню (от большего к меньшему)
+        # и по позиции (сверху вниз)
+        groups.sort(key=lambda x: (-x[2], x[0]))
+
+        # Применяем группировку
+        for start_row, end_row, level, group_name in groups:
+            if start_row < end_row:  # Группируем если есть что группировать
+                # Группируем все строки под группой
+                for row in range(start_row + 1, end_row + 1):
+                    current_level = ws.row_dimensions[row].outline_level
+                    ws.row_dimensions[row].outline_level = current_level + 1 if current_level is not None else 1
+                    ws.row_dimensions[row].hidden = False
+
+        # Отключаем группировку для заголовка
+        ws.row_dimensions[1].outline_level = 0
+        
         # Форматирование
         ws.freeze_panes = 'A2'
         
