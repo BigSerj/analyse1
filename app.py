@@ -9,6 +9,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink  # Обновленный и�
 from datetime import datetime, timedelta
 import json
 import threading
+import math
 
 app = Flask(__name__)
 
@@ -171,7 +172,7 @@ def get_stores():
         'Accept': 'application/json;charset=utf-8'
     }
     
-    print(f"Отправляем запрос для получения списка складов: URL={url}, Headers={headers}")  # Для отладки
+    print(f"Отправляем запрос для полуения списка складов: URL={url}, Headers={headers}")  # Для отладки
     
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
@@ -470,7 +471,7 @@ def create_excel_report(data, store_id, end_date, planning_days):
         headers = group_level_headers + [
             'UUID',  # Изменено название столбца
             'Наименоване', 'Количество', 'Прибыльность', 'Скорость продаж', 
-            f'Прогноз на {planning_days} дней'
+            f'Прогноз на {planning_days} дней', 'Минимальный остаток'
         ]
         
         # Записываем заголовки
@@ -497,7 +498,7 @@ def create_excel_report(data, store_id, end_date, planning_days):
                     uuid_cell.alignment = Alignment(horizontal='left', shrink_to_fit=False)
                     current_row += 1
             
-            # При запис�� UUID товара
+            # При запис UUID товара
             uuid_cell = ws.cell(row=current_row, column=max_depth)
             if product['product_href']:
                 uuid_cell.value = product['product_uuid']  # Записываем полный UUID
@@ -510,12 +511,13 @@ def create_excel_report(data, store_id, end_date, planning_days):
             ws.cell(row=current_row, column=max_depth+3, value=product['profit'])
             ws.cell(row=current_row, column=max_depth+4, value=product['sales_speed'])
             ws.cell(row=current_row, column=max_depth+5, value=product['forecast'])
+            ws.cell(row=current_row, column=max_depth+6, value=math.ceil(product['forecast']))
             
             current_row += 1
             current_uuid_path = uuid_path
 
         # Обновляем диапазон таблицы с учетом реальной глубины
-        last_col = max_depth + 5  # 5 - количество основных столбцов с учетом нового столбца UUID
+        last_col = max_depth + 6  # Увеличиваем на 1, так как добавили новый столбец
         table_ref = f"A1:{chr(64 + last_col)}{current_row-1}"
         tab = Table(displayName="Table1", ref=table_ref)
         style = TableStyleInfo(
