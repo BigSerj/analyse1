@@ -182,7 +182,7 @@
             background-color: #cc0000; /* темно-красный */
         }
 
-        /* Обновляем стиль для контейнера group-selects в блоке минимальных остатков */
+        /* Обновляем стиль для контейнера group-selects в блоке минимальны остатков */
         #manual-stock-wrapper .group-selects {
             width: calc(100% - 170px); /* Оставляем место для поля ввода */
             display: flex;
@@ -220,7 +220,7 @@
             padding: 0;
         }
         
-        /* Оставляем стиль для group-selects в блоке "Группа товаров:" без изменений */
+        /* Оставляем стиль ля group-selects в блоке "Группа товаров:" без изменений */
         #groups-wrapper .group-selects {
             width: 100%;
         }
@@ -244,7 +244,7 @@
         
         <!-- Добавляем hr перед "Группа товаров:" -->
         <hr>
-        <label>Группа товаров:</label>
+        <label style="display: block; margin: 3px 0;">Группа товаров:</label>
         
         <div id="groups-wrapper">
             <div class="group-container" id="group-container-0">
@@ -267,15 +267,16 @@
         </div>
         
         <!-- Добавляем hr перед "Дней планирования закупки:" -->
-        <hr>
-        <div class="form-group">
-            <label for="planning_days">Дней планирования закупки:</label>
-            <input type="number" id="planning_days" name="planning_days" value="30" min="1" required>
+        <hr style="margin: 0;">
+        <div class="form-group" style="display: flex; margin: 0; height: 24px; padding: 3px 0;">
+            <label for="planning_days" style="margin-right: 10px; line-height: 24px;">Дней планирования закупки:</label>
+            <input type="number" id="planning_days" name="planning_days" class="form-control" style="width: 100px; height: 20px; padding: 0 5px; box-sizing: border-box; margin-top: 2px;" value="30">
         </div>
+        <hr style="margin: 0;">
         
         <!-- Добавляем hr перед "Введите минимальный остаток..." -->
         <hr>
-        <label>Введите минимальный остаток для товаров в подгруппе не ниже:</label>
+        <label style="display: block; margin: 3px 0;">Введите минимальный остаток для товаров в подгруппе не ниже:</label>
         
         <div id="manual-stock-wrapper">
             <div class="group-container" id="manual-stock-container-0">
@@ -287,7 +288,7 @@
                         {% endfor %}
                     </select>
                 </div>
-                <input type="number" class="manual-stock-value" min="0" placeholder="Минимальный остток" style="display: none; width: 150px; margin-left: 10px;">
+                <input type="number" class="manual-stock-value" min="0" placeholder="Минимальный остаток" style="display: none; width: 150px; margin-left: 10px;">
                 <button type="button" class="remove-container-btn" onclick="removeManualStockContainer(this)" style="display: none;">×</button>
             </div>
         </div>
@@ -673,7 +674,7 @@
             stockInput.style.marginLeft = '10px';
             newContainer.appendChild(stockInput);
             
-            // Добавляем кнопку удаления (скрытую по умолчанию)
+            // Добавляем нопку удаления (скрытую по умолчанию)
             const removeButton = document.createElement('button');
             removeButton.type = 'button';
             removeButton.className = 'remove-container-btn';
@@ -763,7 +764,7 @@
             updateRemoveButtons();
         }
 
-        // Функция для обновления видимости кнопок удаления
+        // Функция для обновления видимости кнопки удаления
         function updateRemoveButtons() {
             const containers = document.querySelectorAll('#manual-stock-wrapper .group-container');
             containers.forEach(container => {

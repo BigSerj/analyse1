@@ -205,7 +205,7 @@ def get_stores():
         stores = response.json()['rows']
         return [{'id': store['id'], 'name': store['name']} for store in stores]
     else:
-        error_message = f"Ошибка при получении списка складов: {response.status_code}. Ответ сервера: {response.text}"
+        error_message = f"Ошибка пр�� получении списка складов: {response.status_code}. Ответ сервера: {response.text}"
         print(error_message)  # Выводим ошибку в консоль для отладки
         raise Exception(error_message)
     
@@ -473,7 +473,7 @@ def create_excel_report(data, store_id, end_date, planning_days, manual_stock_se
                 sales_speed, group_uuid, group_name, product_uuid, product_href = get_sales_speed(variant_id, store_id, end_date, is_variant)
                 if sales_speed != 0:
                     full_path, uuid_path = get_group_path(group_uuid, product_groups)
-                    max_depth = max(max_depth, len(uuid_path))  # Используем длину списка UUID
+                    max_depth = max(max_depth, len(uuid_path))  # Используем длину списа UUID
                     
                     products_data.append({
                         'name': assortment.get('name', ''),
@@ -710,4 +710,5 @@ def get_names_by_uuid(uuid_path, product_groups):
     return [find_name_by_uuid(product_groups, uuid) or '' for uuid in uuid_path]
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    print("Starting Flask app...")
+    app.run(debug=True, port=5000)
