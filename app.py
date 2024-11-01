@@ -40,10 +40,21 @@ def index():
         start_date = request.form['start_date']
         end_date = request.form['end_date']
         store_id = request.form['store_id']
-        planning_days = int(request.form['planning_days'])  # Получаем количетво дней
-        product_groups = request.form['product_group'].split(',') if request.form['product_group'] else []
+        planning_days = int(request.form['planning_days'])
         
-        print(f"Received form data: start_date={start_date}, end_date={end_date}, store_id={store_id}, product_groups={product_groups}, planning_days={planning_days}")
+        # Получаем значения ТОЛЬКО из блока "Группа товаров:"
+        product_groups = []
+        if 'final_product_groups' in request.form and request.form['final_product_groups']:
+            raw_groups = request.form['final_product_groups']
+            print(f"Raw product groups from form (final_product_groups): {raw_groups}")  # Отладка
+            product_groups = [group for group in raw_groups.split(',') if group]
+            print(f"Processed product groups: {product_groups}")  # Отладка
+        
+        # Получаем настройки минимальных остатков отдельно
+        manual_stock_settings = request.form.get('final_manual_stock_groups', '[]')
+        
+        print(f"Final product groups being sent to get_report_data: {product_groups}")  # Отладка
+        print(f"Manual stock settings being sent: {manual_stock_settings}")  # Отладка
         
         try:
             report_data = get_report_data(start_date, end_date, store_id, product_groups)
@@ -51,7 +62,7 @@ def index():
             if not report_data or 'rows' not in report_data or not report_data['rows']:
                 return "Нет данных для формирования отчета для выбранных параметров", 404
             
-            excel_file = create_excel_report(report_data, store_id, end_date, planning_days)  # Предаем planning_days
+            excel_file = create_excel_report(report_data, store_id, end_date, planning_days, manual_stock_settings)
             
             return send_file(excel_file, as_attachment=True, download_name='profitability_report.xlsx')
         except Exception as e:
@@ -81,6 +92,8 @@ def check_if_cancelled():
             raise Exception("Processing cancelled by user")
 
 def get_report_data(start_date, end_date, store_id, product_groups):
+    print(f"\nStarting get_report_data with product_groups: {product_groups}")  # Начало функции
+    
     global processing_cancelled
     with processing_lock:
         processing_cancelled = False
@@ -108,28 +121,41 @@ def get_report_data(start_date, end_date, store_id, product_groups):
         
         filter_parts = []
         
+        print(f"Building filter with product_groups: {product_groups}")  # Отладка
+        
+        # Добавляем фильтр по складу
         if store_id:
             store_url = f"{BASE_URL}/entity/store/{store_id}"
-            filter_parts.append(f'store={store_url}')
+            store_filter = f'store={store_url}'
+            filter_parts.append(store_filter)
+            print(f"Added store filter: {store_filter}")  # Отладка
         
-        # Modified to handle multiple product groups
+        # Формируем фильтр по группам
         if product_groups:
+            product_folder_parts = []
             for group_id in product_groups:
-                if group_id:  # Check if group_id is not empty
+                if group_id:  # Проверяем, что group_id не пустой
                     product_folder_url = f"{BASE_URL}/entity/productfolder/{group_id}"
-                    filter_parts.append(f'productFolder={product_folder_url}')
+                    product_folder_parts.append(product_folder_url)
+                    print(f"Added group URL: {product_folder_url}")  # Отладка
+            
+            if product_folder_parts:
+                # Формируем фильтр по группам через точку с запятой (;)
+                folders_filter = '&filter='.join([f'productFolder={url}' for url in product_folder_parts])
+                filter_parts.append(folders_filter)
+                print(f"Combined group filters: {folders_filter}")  # Отладка
         
         if filter_parts:
-            # Join all filter parts with semicolon
-            params['filter'] = ';'.join(filter_parts)
+            # Объединяем все части фильтра через запятую (И)
+            params['filter'] = '&filter='.join(filter_parts)
+            print(f"Final filter parameter: {params['filter']}")  # Отладка
         
         all_rows = []
         total_count = None
         
         while True:
-            check_if_cancelled()  # Проверяем отмену
+            check_if_cancelled()
             
-            # Формируем строку запроса
             query_params = [f"{k}={v}" for k, v in params.items() if k != 'filter']
             if 'filter' in params:
                 query_params.append(f"filter={params['filter']}")
@@ -297,12 +323,12 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
     query_string = '&'.join([f"{k}={v}" for k, v in params.items()] + filter_params)
     full_url = f"{url}?{query_string}"
     
-    print(f"Запрос для получения данных о продажах: URL={full_url}")
+    print(f"Запрос для получения данных о родажах: URL={full_url}")
     
     response = requests.get(full_url, headers=headers)
     if response.status_code != 200:
         print(f"Ошибка пи получении данных о проажах: {response.status_code}. Ответ ервера: {response.text}")
-        return 0, '', '', '', ''  # Возвращаем 0 для скорости и пустую строку для UUID
+        return 0, '', '', '', ''  # Возвращаем 0 для скоости и пустую строку для UUID
 
     data = response.json()
     rows = data.get('rows', [])
@@ -326,7 +352,7 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
         group_uuid = group_href.split('/')[-1] if group_href else ''
         group_name = product_folder.get('name', '')
         
-        # Получаем UUID и ссылку на товар из отфильтрованной строки
+        # Получаем UUID сылку на товар из отфильтрованной строки
         product_meta = assortment.get('meta', {})
         product_href = product_meta.get('uuidHref', '')
         if product_href:
@@ -334,7 +360,7 @@ def get_sales_speed(variant_id, store_id, end_date, is_variant):
         
         print(f"Found group UUID: {group_uuid}, name: {group_name}")
 
-    # Сортировка операций по дате
+    # Сортировка оперций по дате
     filtered_rows.sort(key=lambda x: datetime.fromisoformat(x['operation']['moment'].replace('Z', '+00:00')))
 
     retail_demand_counter = 0
@@ -418,12 +444,14 @@ def get_sheet_name(products_data):
     if len(sheet_name) > 31:
         sheet_name = sheet_name[:28] + "..."
     
-    # Если название пустое, используем значение по умолчанию
+    # Если название пустое, используем значение по умолчанию 
     return sheet_name if sheet_name else "Отчет прибльности"
 
-def create_excel_report(data, store_id, end_date, planning_days):
+def create_excel_report(data, store_id, end_date, planning_days, manual_stock_settings=None):
     try:
         print("Начало создания Excel отчета")
+        print(f"Полученные настройки минимальных остатков: {manual_stock_settings}")  # Для отладки
+        
         wb = Workbook()
         ws = wb.active
         
@@ -466,11 +494,11 @@ def create_excel_report(data, store_id, end_date, planning_days):
         # Сортируем данные по полному пути групп по возрастанию
         products_data.sort(key=lambda x: x['group_path'])
 
-        # Формируем заголовки с учетом реальной глубины, начиная со вворого уровня
+        # Формируем заголовк с учетом реальной глубины, начиная со вворого уровня
         group_level_headers = [f'Уровень {i+2}' for i in range(max_depth-1)] if max_depth > 1 else []
         headers = group_level_headers + [
-            'UUID',  # Изменено название столбца
-            'Наименоване', 'Количество', 'Прибыльность', 'Скорость продаж', 
+            'UUID',  # Изменено название стобц
+            'Наиноване', 'Количество', 'Прибыьность', 'Скорость продаж', 
             f'Прогноз на {planning_days} дней', 'Минимальный остаток'
         ]
         
@@ -484,6 +512,31 @@ def create_excel_report(data, store_id, end_date, planning_days):
         current_row = 2
         current_uuid_path = []
         
+        def get_manual_stock_value(uuid_path):
+            if not manual_stock_settings:
+                return None
+                
+            try:
+                manual_settings = json.loads(manual_stock_settings)
+                print(f"Разобранные настройки: {manual_settings}")  # Для отладки
+                max_stock = None
+                
+                # Проверяем каждую группу в пути товара
+                for group_uuid in uuid_path:
+                    for setting in manual_settings:
+                        if setting['group_id'] == group_uuid:
+                            setting_value = int(setting['min_stock'])
+                            print(f"Найдено значение {setting_value} для гуппы {group_uuid}")  # Для отладки
+                            # Сохраняем максимальное значение из всех подходящих групп
+                            if max_stock is None or setting_value > max_stock:
+                                max_stock = setting_value
+                
+                return max_stock
+            except Exception as e:
+                print(f"Ошибка при обработке настроек минимальных остатков: {str(e)}")
+                return None
+
+        # При записи данных продукта
         for product in products_data:
             uuid_path = product['uuid_path']
             names_by_level = product['names_by_level']
@@ -511,7 +564,22 @@ def create_excel_report(data, store_id, end_date, planning_days):
             ws.cell(row=current_row, column=max_depth+3, value=product['profit'])
             ws.cell(row=current_row, column=max_depth+4, value=product['sales_speed'])
             ws.cell(row=current_row, column=max_depth+5, value=product['forecast'])
-            ws.cell(row=current_row, column=max_depth+6, value=math.ceil(product['forecast']))
+            
+            # Вычисляем автоматический минимальный остаток (округление вверх прогноза)
+            auto_min_stock = math.ceil(product['forecast'])
+            
+            # Получаем ручное значение минимального остатка для всей иерархии групп товара
+            manual_stock = get_manual_stock_value(product['uuid_path'])
+            # print(f"manual_stock: {manual_stock}")
+            # print(f"manual_stock_settings: {manual_stock_settings}")
+            
+            # Если есть ручное значение, сравниваем его с автоматическим и берем большее
+            min_stock_value = auto_min_stock  # По умолчанию используем автоматическое значение
+            if manual_stock is not None:
+                min_stock_value = max(auto_min_stock, manual_stock)
+            
+            # Записываем итоговое значение в ячейку
+            ws.cell(row=current_row, column=max_depth+6, value=min_stock_value)
             
             current_row += 1
             current_uuid_path = uuid_path
@@ -564,8 +632,8 @@ def create_excel_report(data, store_id, end_date, planning_days):
         # Находим все группы
         groups = find_groups(ws, 2, current_row - 1, max_depth)
 
-        # Сортируем группы по уровню (от большего к меньшему)
-        # и по позиции (сверху вниз)
+        # Сортируем групп по уровню (от большего к меньшему)
+        # и по позиции (сверху низ)
         groups.sort(key=lambda x: (-x[2], x[0]))
 
         # Применяем группировку
